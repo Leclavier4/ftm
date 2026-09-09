@@ -1,7 +1,7 @@
 // FTM Academy — contenu du jeu
 // Tous les flags sont vérifiés par hachage (cyrb53) : ils ne sont jamais en clair ici.
 
-function cyrb53(str, seed = 0) {
+export function cyrb53(str, seed = 0) {
   let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
   for (let i = 0; i < str.length; i++) {
     const ch = str.charCodeAt(i);

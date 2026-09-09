@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
-import { WORLDS, ALL_LABS, TOTAL_XP, RANKS, rankFor, checkFlag } from './curriculum.js'
+import { WORLDS, ALL_LABS, TOTAL_XP, RANKS, rankFor, checkFlag, cyrb53 } from './curriculum.js'
+import { EXAM, PASS, TOTAL, shuffled } from './exam.js'
 
 const STORAGE_KEY = 'ftm.progress.v1'
 
@@ -37,7 +38,20 @@ function useProgress() {
 
   const reset = useCallback(() => setProgress({}), [])
 
-  return { progress, capture, reset }
+  // Enregistre un score d'examen : garde le meilleur essai, ne "dé-réussit" jamais.
+  const recordExam = useCallback((score) => {
+    setProgress((p) => ({
+      ...p,
+      examBest: Math.max(p.examBest || 0, score),
+      examPassed: !!p.examPassed || score >= PASS,
+    }))
+  }, [])
+
+  const setStudentName = useCallback((name) => {
+    setProgress((p) => ({ ...p, studentName: name }))
+  }, [])
+
+  return { progress, capture, reset, recordExam, setStudentName }
 }
 
 // ---------- Helpers de progression ----------
@@ -114,6 +128,76 @@ function Byte({ mood = 'idle', size = 64 }) {
   )
 }
 
+// ---------- Blason Vertex Académie ----------
+
+function VertexMark({ size = 72 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 100 100" aria-hidden="true">
+      <defs>
+        <linearGradient id="vg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#1C4A7A" /><stop offset="1" stopColor="#0C2340" />
+        </linearGradient>
+      </defs>
+      <rect x="3" y="3" width="94" height="94" rx="22" fill="url(#vg)" />
+      <path d="M50 24 L75 74 L25 74 Z" fill="none" stroke="#fff" strokeWidth="4" strokeLinejoin="round" />
+      <line x1="50" y1="27" x2="50" y2="74" stroke="#C79A3B" strokeWidth="3.5" strokeLinecap="round" />
+      <circle cx="50" cy="24" r="7" fill="#C79A3B" />
+      <circle cx="25" cy="74" r="4.5" fill="#9FB2C6" />
+      <circle cx="75" cy="74" r="4.5" fill="#9FB2C6" />
+    </svg>
+  )
+}
+
+// Utilise le logo fourni (public/vertex-academie.png) s'il charge, sinon le blason SVG de secours.
+function VertexLogo({ size = 72 }) {
+  const [broken, setBroken] = useState(false)
+  if (broken) return <VertexMark size={size} />
+  return (
+    <img
+      src="/vertex-academie.png"
+      alt="Vertex Académie"
+      width={size}
+      height={size}
+      style={{ objectFit: 'contain', display: 'block' }}
+      onError={() => setBroken(true)}
+    />
+  )
+}
+
+// Sceau doré du certificat (rosette SVG portant le rang atteint).
+function CertSeal({ rank }) {
+  const points = Array.from({ length: 12 }).map((_, i) => {
+    const angle = (i * 30 * Math.PI) / 180
+    return { x: 50 + Math.cos(angle) * 38, y: 50 + Math.sin(angle) * 38 }
+  })
+  return (
+    <div className="cert-seal-wrap">
+      <svg width="82" height="82" viewBox="0 0 100 100" aria-hidden="true">
+        <defs>
+          <radialGradient id="sealGrad" cx="50%" cy="35%" r="70%">
+            <stop offset="0%" stopColor="#E9C568" />
+            <stop offset="100%" stopColor="#C79A3B" />
+          </radialGradient>
+        </defs>
+        {points.map((p, i) => (
+          <circle key={i} cx={p.x} cy={p.y} r="8.5" fill="url(#sealGrad)" />
+        ))}
+        <circle cx="50" cy="50" r="33" fill="url(#sealGrad)" stroke="#0C2340" strokeWidth="1.5" />
+        <circle cx="50" cy="50" r="26" fill="none" stroke="#0C2340" strokeWidth="1" />
+        <text x="50" y="47" textAnchor="middle" fontSize="9" fill="#0C2340" fontFamily="'Playfair Display', serif" fontWeight="700">
+          VERTEX
+        </text>
+        <text x="50" y="59" textAnchor="middle" fontSize="6.5" fill="#0C2340" fontFamily="'Inter', sans-serif">
+          ACADÉMIE
+        </text>
+      </svg>
+      <span className="cert-seal-rank">
+        {rank.emoji} {rank.name}
+      </span>
+    </div>
+  )
+}
+
 // ---------- Confetti + Toast ----------
 
 function Confetti({ triggerId }) {
@@ -180,7 +264,7 @@ function TopBar({ rankInfo, xp, onReset, onLogoClick }) {
   const { current, toNextPercent } = rankInfo
   const rankLevel = RANKS.indexOf(current)
   return (
-    <header className="topbar">
+    <header className="topbar no-print">
       <button type="button" className="logo" onClick={onLogoClick} aria-label="Retour à l'accueil">
         <span className="logo-mark">👾</span>
         <span className="logo-text">
@@ -278,6 +362,54 @@ function WorldCard({ meta, index, onOpen }) {
         {status === 'locked' ? '🔒' : status === 'complete' ? '✓' : '▸'}
       </span>
     </button>
+  )
+}
+
+// ---------- Carte examen final (accueil) ----------
+
+function ExamCard({ allDone, examPassed, examBest, onStart, onCertificate }) {
+  if (!allDone) {
+    return (
+      <div className="exam-card exam-card--locked">
+        <span className="exam-card-icon" aria-hidden="true">🔒</span>
+        <div className="exam-card-body">
+          <span className="exam-card-title">Examen final</span>
+          <span className="exam-card-desc">Termine les 9 mondes pour débloquer l'examen final</span>
+        </div>
+      </div>
+    )
+  }
+
+  if (examPassed) {
+    return (
+      <div className="exam-card exam-card--passed">
+        <span className="exam-card-icon" aria-hidden="true">✅</span>
+        <div className="exam-card-body">
+          <span className="exam-card-title">Examen final — réussi</span>
+          <span className="exam-card-desc">
+            Meilleur score {examBest}/{TOTAL}
+          </span>
+        </div>
+        <button type="button" className="btn btn-primary" onClick={onCertificate}>
+          Voir / générer mon certificat
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="exam-card exam-card--available">
+      <span className="exam-card-icon" aria-hidden="true">🎓</span>
+      <div className="exam-card-body">
+        <span className="exam-card-title">Examen final</span>
+        <span className="exam-card-desc">
+          15 questions · réussite à 11/15{examBest ? ` · meilleur essai ${examBest}/${TOTAL}` : ''}
+        </span>
+      </div>
+      <button type="button" className="btn btn-primary" onClick={onStart}>
+        🎓 Passer l'examen final
+      </button>
+    </div>
   )
 }
 
@@ -474,11 +606,242 @@ function LabView({ world, lab, captured, onCapture, onBackHome, onBackWorld, onN
   )
 }
 
+// ---------- Vue examen final ----------
+
+function ExamView({ onBackHome, onCertificate, recordExam }) {
+  const [questions, setQuestions] = useState(() => shuffled(EXAM))
+  const [answers, setAnswers] = useState({})
+  const [mode, setMode] = useState('answering') // answering | corrected
+  const [score, setScore] = useState(0)
+
+  function selectAnswer(qid, idx) {
+    if (mode === 'corrected') return
+    setAnswers((a) => ({ ...a, [qid]: idx }))
+  }
+
+  function handleValidate(e) {
+    e.preventDefault()
+    const s = questions.reduce((acc, q) => acc + (answers[q.id] === q.answer ? 1 : 0), 0)
+    setScore(s)
+    setMode('corrected')
+    recordExam(s)
+  }
+
+  function handleRestart() {
+    setQuestions(shuffled(EXAM))
+    setAnswers({})
+    setMode('answering')
+    setScore(0)
+  }
+
+  const answeredCount = Object.keys(answers).length
+  const passed = score >= PASS
+
+  return (
+    <section className="exam-view">
+      <Breadcrumb items={[{ label: 'Accueil', onClick: onBackHome }, { label: 'Examen final' }]} />
+      <header className="exam-header">
+        <p className="section-label">// examen final</p>
+        <h2>Examen final</h2>
+        <p className="exam-sub">15 questions · réussite à 11/15 · tu peux réessayer</p>
+      </header>
+
+      <form onSubmit={handleValidate}>
+        <ol className="exam-list">
+          {questions.map((q, i) => {
+            const chosen = answers[q.id]
+            return (
+              <li key={q.id} className="exam-q">
+                <p className="exam-q-module">{q.module}</p>
+                <p className="exam-q-text">
+                  <span className="exam-q-num">{String(i + 1).padStart(2, '0')}</span> {q.q}
+                </p>
+                <div className="exam-options">
+                  {q.options.map((opt, oi) => {
+                    let cls = 'exam-option'
+                    if (mode === 'corrected') {
+                      if (oi === q.answer) cls += ' exam-option--correct'
+                      else if (oi === chosen) cls += ' exam-option--wrong'
+                    } else if (chosen === oi) cls += ' exam-option--selected'
+                    return (
+                      <label key={oi} className={cls}>
+                        <input
+                          type="radio"
+                          name={q.id}
+                          checked={chosen === oi}
+                          onChange={() => selectAnswer(q.id, oi)}
+                          disabled={mode === 'corrected'}
+                        />
+                        <span>{opt}</span>
+                      </label>
+                    )
+                  })}
+                </div>
+                {mode === 'corrected' && (
+                  <p className={`exam-explain ${chosen === q.answer ? 'exam-explain--ok' : 'exam-explain--ko'}`}>
+                    {chosen === q.answer ? '✓ ' : '✗ '}
+                    {q.explain}
+                  </p>
+                )}
+              </li>
+            )
+          })}
+        </ol>
+
+        {mode === 'answering' && (
+          <div className="exam-actions">
+            <p className="exam-progress">
+              {answeredCount}/{TOTAL} répondues
+            </p>
+            <button type="submit" className="btn btn-primary btn-lg" disabled={answeredCount < TOTAL}>
+              valider mes réponses
+            </button>
+          </div>
+        )}
+      </form>
+
+      {mode === 'corrected' && (
+        <div className={`exam-result ${passed ? 'exam-result--pass' : 'exam-result--fail'}`}>
+          <p className="exam-score">
+            {score}/{TOTAL}
+          </p>
+          {passed ? (
+            <>
+              <p className="exam-result-msg">✓ Réussi !</p>
+              <button type="button" className="btn btn-primary btn-lg" onClick={onCertificate}>
+                🎓 générer mon certificat
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="exam-result-msg">Pas encore — révise et réessaie</p>
+              <button type="button" className="btn btn-ghost btn-lg" onClick={handleRestart}>
+                recommencer
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </section>
+  )
+}
+
+// ---------- Vue certificat ----------
+
+function CertificateView({ progress, xp, onSetName, onBackHome }) {
+  const [showForm, setShowForm] = useState(!progress.studentName)
+  const [nameInput, setNameInput] = useState(progress.studentName || '')
+
+  function handleGenerate(e) {
+    e.preventDefault()
+    const trimmed = nameInput.trim()
+    if (!trimmed) return
+    onSetName(trimmed)
+    setShowForm(false)
+  }
+
+  if (showForm) {
+    return (
+      <section className="cert-form-view">
+        <Breadcrumb items={[{ label: 'Accueil', onClick: onBackHome }, { label: 'Certificat' }]} />
+        <div className="cert-form-card">
+          <VertexLogo size={56} />
+          <h2>Génère ton certificat</h2>
+          <form onSubmit={handleGenerate}>
+            <label htmlFor="student-name">Ton nom complet (tel qu'il figurera sur le certificat)</label>
+            <input
+              id="student-name"
+              value={nameInput}
+              onChange={(e) => setNameInput(e.target.value)}
+              placeholder="Prénom Nom"
+              autoComplete="off"
+              autoFocus
+            />
+            <button type="submit" className="btn btn-primary" disabled={!nameInput.trim()}>
+              générer
+            </button>
+          </form>
+        </div>
+      </section>
+    )
+  }
+
+  const name = progress.studentName || ''
+  const dateStr = new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })
+  const rank = rankFor(xp)
+  const score = progress.examBest || 0
+  const code = 'VTX-' + cyrb53(name + dateStr).toUpperCase().slice(0, 8)
+
+  return (
+    <section className="cert-view">
+      <div className="cert-toolbar no-print">
+        <Breadcrumb items={[{ label: 'Accueil', onClick: onBackHome }, { label: 'Certificat' }]} />
+        <div className="cert-toolbar-actions">
+          <button type="button" className="btn btn-ghost" onClick={() => setShowForm(true)}>
+            modifier le nom
+          </button>
+          <button type="button" className="btn btn-primary" onClick={() => window.print()}>
+            🖨 Imprimer / Enregistrer en PDF
+          </button>
+        </div>
+      </div>
+
+      <div className="certificate">
+        <div className="cert-border">
+          <header className="cert-header">
+            <VertexLogo size={64} />
+            <div className="cert-brand">
+              <span className="cert-brand-name">VERTEX ACADÉMIE</span>
+              <span className="cert-brand-sub">Cybersecurity Training</span>
+            </div>
+          </header>
+
+          <h1 className="cert-title">Certificat de fin de formation</h1>
+
+          <div className="cert-body">
+            <p className="cert-line">Ce présent certificat atteste que</p>
+            <p className="cert-name">{name}</p>
+            <p className="cert-line">a suivi et validé avec succès le parcours</p>
+            <p className="cert-program">« FTM Academy — Cybersécurité, du niveau 0 au niveau God »</p>
+            <p className="cert-result">
+              Examen final réussi avec un score de {score}/15.
+              <span className="cert-rank">
+                Rang : {rank.name} {rank.emoji}
+              </span>
+            </p>
+          </div>
+
+          <div className="cert-modules">
+            {WORLDS.map((w) => (
+              <p className="cert-module" key={w.id}>
+                ✓ {w.name} — {w.tagline}
+              </p>
+            ))}
+          </div>
+
+          <footer className="cert-footer">
+            <div className="cert-footer-left">
+              <p className="cert-date">Délivré le {dateStr}</p>
+              <div className="cert-sig">
+                <span className="cert-sig-line">Chabmane — Vertex Global</span>
+              </div>
+              <p className="cert-code">Code de vérification : {code}</p>
+            </div>
+            <CertSeal rank={rank} />
+          </footer>
+
+          <p className="cert-banner">Prêt pour le niveau supérieur.</p>
+        </div>
+      </div>
+    </section>
+  )
+}
+
 // ---------- Pied de page ----------
 
 function Footer() {
   return (
-    <footer className="footer">
+    <footer className="footer no-print">
       <p>
         <span className="prompt-inline">root@ftm:~$</span> règle d'or — on ne teste jamais un système sans
         autorisation. Tout se passe dans TON labo.
@@ -493,7 +856,7 @@ function Footer() {
 // ---------- App ----------
 
 export default function App() {
-  const { progress, capture, reset } = useProgress()
+  const { progress, capture, reset, recordExam, setStudentName } = useProgress()
   const [view, setView] = useState({ name: 'home' })
   const [confettiId, setConfettiId] = useState(0)
   const [toast, setToast] = useState(null)
@@ -502,12 +865,15 @@ export default function App() {
   const worldsMeta = useMemo(() => computeWorldsMeta(progress), [progress])
   const xp = useMemo(() => ALL_LABS.reduce((sum, l) => sum + (progress[l.id] ? l.xp : 0), 0), [progress])
   const rankInfo = useMemo(() => getRankInfo(xp), [xp])
+  const allWorldsDone = useMemo(() => worldsMeta.every((m) => m.complete), [worldsMeta])
 
   useEffect(() => () => clearTimeout(toastTimer.current), [])
 
   const goHome = useCallback(() => setView({ name: 'home' }), [])
   const goWorld = useCallback((worldId) => setView({ name: 'world', worldId }), [])
   const goLab = useCallback((worldId, labId) => setView({ name: 'lab', worldId, labId }), [])
+  const goExam = useCallback(() => setView({ name: 'exam' }), [])
+  const goCertificate = useCallback(() => setView({ name: 'certificate' }), [])
 
   const fireCapture = useCallback((labId, xpAmount) => {
     setToast(`+${xpAmount} XP · flag capturé`)
@@ -540,19 +906,28 @@ export default function App() {
     [goLab]
   )
 
+  const homeContent = (
+    <>
+      <Hero progress={progress} onStart={handleHeroStart} />
+      <div className="worlds-list">
+        {worldsMeta.map((meta, i) => (
+          <WorldCard key={meta.world.id} meta={meta} index={i} onOpen={goWorld} />
+        ))}
+      </div>
+      <ExamCard
+        allDone={allWorldsDone}
+        examPassed={!!progress.examPassed}
+        examBest={progress.examBest || 0}
+        onStart={goExam}
+        onCertificate={goCertificate}
+      />
+    </>
+  )
+
   let content = null
 
   if (view.name === 'home') {
-    content = (
-      <>
-        <Hero progress={progress} onStart={handleHeroStart} />
-        <div className="worlds-list">
-          {worldsMeta.map((meta, i) => (
-            <WorldCard key={meta.world.id} meta={meta} index={i} onOpen={goWorld} />
-          ))}
-        </div>
-      </>
-    )
+    content = homeContent
   } else if (view.name === 'world') {
     const world = WORLDS.find((w) => w.id === view.worldId)
     if (world) {
@@ -577,20 +952,19 @@ export default function App() {
         />
       )
     }
+  } else if (view.name === 'exam') {
+    if (allWorldsDone) {
+      content = <ExamView onBackHome={goHome} onCertificate={goCertificate} recordExam={recordExam} />
+    }
+  } else if (view.name === 'certificate') {
+    if (progress.examPassed) {
+      content = <CertificateView progress={progress} xp={xp} onSetName={setStudentName} onBackHome={goHome} />
+    }
   }
 
   if (!content) {
-    // vue invalide (id inconnu) : retour à l'accueil
-    content = (
-      <>
-        <Hero progress={progress} onStart={handleHeroStart} />
-        <div className="worlds-list">
-          {worldsMeta.map((meta, i) => (
-            <WorldCard key={meta.world.id} meta={meta} index={i} onOpen={goWorld} />
-          ))}
-        </div>
-      </>
-    )
+    // vue invalide ou inaccessible (id inconnu, examen/certificat pas encore débloqué) : retour à l'accueil
+    content = homeContent
   }
 
   return (
@@ -612,7 +986,7 @@ export default function App() {
 // ---------- CSS ----------
 
 const CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Playfair+Display:wght@600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap');
 
 :root {
   --bg: #0A0E17;
@@ -630,6 +1004,14 @@ const CSS = `
   --radius: 10px;
   --font-title: 'Space Grotesk', 'Inter', sans-serif;
   --font-body: 'Inter', sans-serif;
+  /* Palette Vertex Académie — réservée au certificat (contraste formel voulu) */
+  --vertex-navy: #12385F;
+  --vertex-navy-dark: #0C2340;
+  --vertex-gold: #C79A3B;
+  --vertex-ink: #1B2A3A;
+  --vertex-paper: #FFFFFF;
+  --vertex-paper-warm: #F6F3EC;
+  --font-serif: 'Playfair Display', Georgia, serif;
   --font-mono: 'JetBrains Mono', monospace;
 }
 
@@ -946,6 +1328,147 @@ code { font-family: var(--font-mono); }
 .footer p { margin: 4px 0; }
 .footer-flags code { color: var(--green); }
 
+/* ---------- Carte examen final (accueil) ---------- */
+
+.exam-card {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 18px 20px; margin-top: 14px;
+}
+.exam-card-icon {
+  font-size: 1.7rem; flex: 0 0 auto; width: 52px; height: 52px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 10px; background: rgba(255,255,255,0.04);
+}
+.exam-card-body { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 200px; }
+.exam-card-title { font-family: var(--font-title); font-weight: 600; font-size: 1.02rem; color: var(--ink); }
+.exam-card-desc { font-size: 0.85rem; color: var(--muted); }
+.exam-card--locked { opacity: 0.5; }
+.exam-card--available { border-color: var(--gold); box-shadow: 0 0 0 1px rgba(240,180,41,0.15); }
+.exam-card--available .exam-card-icon { background: rgba(240,180,41,0.14); }
+.exam-card--passed { border-color: var(--green); }
+.exam-card--passed .exam-card-icon { background: rgba(55,224,166,0.14); }
+
+/* ---------- Vue examen ---------- */
+
+.exam-header { margin-bottom: 22px; }
+.exam-header h2 { font-family: var(--font-title); margin: 4px 0; font-size: 1.5rem; }
+.exam-sub { color: var(--muted); font-family: var(--font-mono); font-size: 0.85rem; margin: 0; }
+
+.exam-list { list-style: none; margin: 0 0 24px; padding: 0; display: flex; flex-direction: column; gap: 16px; }
+.exam-q { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; }
+.exam-q-module {
+  font-family: var(--font-mono); font-size: 0.68rem; color: var(--violet); margin: 0 0 6px;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.exam-q-text { font-weight: 600; margin: 0 0 12px; color: var(--ink); line-height: 1.45; }
+.exam-q-num { color: var(--muted); font-family: var(--font-mono); margin-right: 6px; }
+.exam-options { display: flex; flex-direction: column; gap: 8px; }
+.exam-option {
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+  font-size: 0.9rem; color: var(--ink); cursor: pointer; transition: border-color 0.15s;
+}
+.exam-option:hover { border-color: var(--cyan); }
+.exam-option input { accent-color: var(--cyan); }
+.exam-option--selected { border-color: var(--cyan); }
+.exam-option--correct { border-color: var(--green); background: rgba(55,224,166,0.08); }
+.exam-option--wrong { border-color: var(--coral); background: rgba(255,107,129,0.08); }
+.exam-explain { margin: 10px 0 0; font-size: 0.83rem; line-height: 1.5; }
+.exam-explain--ok { color: var(--green); }
+.exam-explain--ko { color: var(--coral); }
+
+.exam-actions { display: flex; align-items: center; gap: 14px; justify-content: center; flex-direction: column; }
+.exam-progress { font-family: var(--font-mono); color: var(--muted); font-size: 0.85rem; margin: 0; }
+
+.exam-result { text-align: center; padding: 26px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); margin-top: 8px; }
+.exam-score { font-family: var(--font-title); font-size: 2.2rem; font-weight: 700; margin: 0 0 6px; }
+.exam-result-msg { font-family: var(--font-mono); margin: 0 0 16px; }
+.exam-result--pass { border-color: var(--green); }
+.exam-result--pass .exam-score, .exam-result--pass .exam-result-msg { color: var(--green); }
+.exam-result--fail { border-color: var(--coral); }
+.exam-result--fail .exam-score, .exam-result--fail .exam-result-msg { color: var(--coral); }
+
+/* ---------- Formulaire du certificat ---------- */
+
+.cert-form-view { max-width: 520px; margin: 30px auto; }
+.cert-form-card {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+  padding: 32px 28px; display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center;
+}
+.cert-form-card h2 { font-family: var(--font-title); margin: 0; color: var(--ink); }
+.cert-form-card form { display: flex; flex-direction: column; gap: 12px; width: 100%; }
+.cert-form-card label { font-size: 0.85rem; color: var(--muted); text-align: left; }
+.cert-form-card input {
+  font-family: var(--font-body); font-size: 1rem; padding: 12px 14px; border-radius: 8px;
+  border: 1px solid var(--line); background: #06090F; color: var(--ink);
+}
+.cert-form-card input:focus { outline: none; border-color: var(--gold); }
+
+/* ---------- Vue certificat (Vertex Académie — style formel, contraste assumé) ---------- */
+
+.cert-view { max-width: 1050px; margin: 0 auto; }
+.cert-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
+.cert-toolbar-actions { display: flex; gap: 10px; }
+
+.certificate {
+  background: var(--vertex-paper); color: var(--vertex-ink); font-family: var(--font-body);
+  aspect-ratio: 297 / 210; width: 100%; max-width: 1050px; margin: 0 auto;
+  border-radius: 4px; box-shadow: 0 30px 80px -30px rgba(12,35,64,0.55);
+  padding: 14px; box-sizing: border-box;
+}
+.cert-border {
+  height: 100%; box-sizing: border-box;
+  border: 3px solid var(--vertex-navy); outline: 1px solid var(--vertex-gold); outline-offset: -8px;
+  padding: 26px 44px; display: flex; flex-direction: column; align-items: center; text-align: center;
+  background: linear-gradient(180deg, var(--vertex-paper) 0%, var(--vertex-paper-warm) 100%);
+}
+
+.cert-header { display: flex; align-items: center; gap: 14px; margin-bottom: 2px; }
+.cert-brand { display: flex; flex-direction: column; align-items: flex-start; }
+.cert-brand-name {
+  font-family: var(--font-serif); font-weight: 700; font-size: 1.3rem; color: var(--vertex-navy);
+  letter-spacing: 0.12em;
+}
+.cert-brand-sub { font-size: 0.68rem; color: var(--vertex-gold); letter-spacing: 0.08em; text-transform: uppercase; }
+
+.cert-title {
+  font-family: var(--font-serif); font-weight: 700; font-size: 1.75rem; color: var(--vertex-navy-dark);
+  margin: 10px 0 4px; position: relative; padding-bottom: 12px;
+}
+.cert-title::after {
+  content: ''; position: absolute; bottom: 0; left: 50%; transform: translateX(-50%);
+  width: 90px; height: 3px; background: var(--vertex-gold);
+}
+
+.cert-body { margin: 12px 0 4px; }
+.cert-line { margin: 2px 0; font-size: 0.94rem; color: var(--vertex-ink); }
+.cert-name { font-family: var(--font-serif); font-weight: 800; font-size: 2.05rem; color: var(--vertex-navy); margin: 6px 0; }
+.cert-program { font-family: var(--font-serif); font-weight: 600; font-style: italic; font-size: 1.02rem; color: var(--vertex-navy-dark); margin: 6px 0; }
+.cert-result { font-size: 0.9rem; margin: 8px 0 2px; color: var(--vertex-ink); }
+.cert-rank { font-weight: 600; color: var(--vertex-gold); margin-left: 8px; }
+
+.cert-modules {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 4px 28px;
+  margin: 12px auto 8px; max-width: 780px; width: 100%; text-align: left;
+}
+.cert-module { font-size: 0.76rem; color: var(--vertex-ink); margin: 0; }
+
+.cert-footer {
+  margin-top: auto; width: 100%; display: flex; align-items: flex-end; justify-content: space-between;
+  padding-top: 10px; border-top: 1px solid rgba(199,154,59,0.4);
+}
+.cert-footer-left { text-align: left; }
+.cert-date { font-size: 0.76rem; color: var(--vertex-ink); margin: 0 0 10px; }
+.cert-sig { border-top: 1px solid var(--vertex-gold); padding-top: 4px; margin-bottom: 6px; width: 200px; }
+.cert-sig-line { font-family: var(--font-serif); font-style: italic; font-size: 0.85rem; color: var(--vertex-navy); }
+.cert-code { font-family: var(--font-mono); font-size: 0.68rem; color: var(--vertex-navy); margin: 0; letter-spacing: 0.03em; }
+
+.cert-seal-wrap { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.cert-seal-rank { font-family: var(--font-mono); font-size: 0.66rem; color: var(--vertex-navy); }
+
+.cert-banner { margin-top: 8px; font-family: var(--font-serif); font-style: italic; font-size: 0.84rem; color: var(--vertex-gold); }
+
 /* ---------- Responsive ---------- */
 
 @media (max-width: 640px) {
@@ -958,11 +1481,26 @@ code { font-family: var(--font-mono); }
   .logo-text { display: none; }
   .world-card { padding: 12px; gap: 12px; }
   .terminal-body { padding: 16px 14px 22px; }
+  .exam-card { padding: 14px; gap: 12px; }
+  .cert-border { padding: 18px 20px; }
+  .cert-modules { grid-template-columns: 1fr; }
+  .cert-name { font-size: 1.5rem; }
+  .certificate { aspect-ratio: auto; }
 }
 
 /* ---------- Accessibilité : mouvement réduit ---------- */
 
 @media (prefers-reduced-motion: reduce) {
   .cursor, .byte-idle, .byte-cheer, .confetti-piece, .toast { animation: none !important; }
+}
+
+/* ---------- Impression : n'imprimer que le certificat, en A4 paysage ---------- */
+
+@media print {
+  body * { visibility: hidden !important; }
+  .certificate, .certificate * { visibility: visible !important; }
+  .certificate { position: absolute; inset: 0; margin: 0; box-shadow: none; width: 100%; height: 100%; }
+  .no-print { display: none !important; }
+  @page { size: A4 landscape; margin: 12mm; }
 }
 `
