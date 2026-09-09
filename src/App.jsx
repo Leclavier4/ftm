@@ -51,7 +51,12 @@ function useProgress() {
     setProgress((p) => ({ ...p, studentName: name }))
   }, [])
 
-  return { progress, capture, reset, recordExam, setStudentName }
+  // Marque le certificat comme délivré : une fois vrai, ça ne redevient jamais faux.
+  const markCertIssued = useCallback(() => {
+    setProgress((p) => (p.certIssued ? p : { ...p, certIssued: true }))
+  }, [])
+
+  return { progress, capture, reset, recordExam, setStudentName, markCertIssued }
 }
 
 // ---------- Helpers de progression ----------
@@ -366,8 +371,27 @@ function WorldCard({ meta, index, onOpen }) {
 }
 
 // ---------- Carte examen final (accueil) ----------
+//
+// Priorité : diplômé (certificat déjà délivré ou examen déjà réussi) > éligible > verrouillé.
+// Une fois diplômé, l'examen ne réapparaît plus jamais — seule la regénération du certificat
+// est proposée.
 
-function ExamCard({ allDone, examPassed, examBest, onStart, onCertificate }) {
+function ExamCard({ allDone, graduated, examBest, onStart, onCertificate }) {
+  if (graduated) {
+    return (
+      <div className="exam-card exam-card--graduated">
+        <span className="exam-card-icon" aria-hidden="true">🎓</span>
+        <div className="exam-card-body">
+          <span className="exam-card-title">Formation terminée</span>
+          <span className="exam-card-desc">Ton certificat Vertex Académie t'attend.</span>
+        </div>
+        <button type="button" className="btn btn-primary" onClick={onCertificate}>
+          🎓 Regénérer mon certificat
+        </button>
+      </div>
+    )
+  }
+
   if (!allDone) {
     return (
       <div className="exam-card exam-card--locked">
@@ -376,23 +400,6 @@ function ExamCard({ allDone, examPassed, examBest, onStart, onCertificate }) {
           <span className="exam-card-title">Examen final</span>
           <span className="exam-card-desc">Termine les 9 mondes pour débloquer l'examen final</span>
         </div>
-      </div>
-    )
-  }
-
-  if (examPassed) {
-    return (
-      <div className="exam-card exam-card--passed">
-        <span className="exam-card-icon" aria-hidden="true">✅</span>
-        <div className="exam-card-body">
-          <span className="exam-card-title">Examen final — réussi</span>
-          <span className="exam-card-desc">
-            Meilleur score {examBest}/{TOTAL}
-          </span>
-        </div>
-        <button type="button" className="btn btn-primary" onClick={onCertificate}>
-          Voir / générer mon certificat
-        </button>
       </div>
     )
   }
@@ -727,8 +734,12 @@ function ExamView({ onBackHome, onCertificate, recordExam }) {
 }
 
 // ---------- Vue certificat ----------
+//
+// Régénérable à volonté : si le nom est déjà connu, le certificat s'affiche directement
+// (à jour : date du jour, score/rang courants), sans repasser par l'examen ni ressaisir quoi
+// que ce soit. Le formulaire ne sert qu'à la toute première génération.
 
-function CertificateView({ progress, xp, onSetName, onBackHome }) {
+function CertificateView({ progress, xp, onSetName, onIssued, onBackHome }) {
   const [showForm, setShowForm] = useState(!progress.studentName)
   const [nameInput, setNameInput] = useState(progress.studentName || '')
 
@@ -737,6 +748,7 @@ function CertificateView({ progress, xp, onSetName, onBackHome }) {
     const trimmed = nameInput.trim()
     if (!trimmed) return
     onSetName(trimmed)
+    onIssued()
     setShowForm(false)
   }
 
@@ -770,7 +782,9 @@ function CertificateView({ progress, xp, onSetName, onBackHome }) {
   const dateStr = new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })
   const rank = rankFor(xp)
   const score = progress.examBest || 0
-  const code = 'VTX-' + cyrb53(name + dateStr).toUpperCase().slice(0, 8)
+  // Indépendant de la date : un même étudiant garde le même code à chaque regénération.
+  const normName = name.trim().toLowerCase().replace(/\s+/g, ' ')
+  const code = 'VTX-' + cyrb53(normName + 'ftm-academy').toUpperCase().slice(0, 8)
 
   return (
     <section className="cert-view">
@@ -822,9 +836,20 @@ function CertificateView({ progress, xp, onSetName, onBackHome }) {
           <footer className="cert-footer">
             <div className="cert-footer-left">
               <p className="cert-date">Délivré le {dateStr}</p>
-              <div className="cert-sig">
-                <span className="cert-sig-name">Abdoul-wadoudou BABA CHABI MANE</span>
-                <span className="cert-sig-title">CEO, Vertex Global</span>
+              <div className="cert-sign">
+                <img
+                  className="cert-sign-img"
+                  src="/signature.png"
+                  alt="Signature"
+                  onError={(e) => {
+                    e.currentTarget.style.display = 'none'
+                    e.currentTarget.nextElementSibling.style.display = 'block'
+                  }}
+                />
+                <span className="cert-sign-calli">Abdoul-wadoudou BABA CHABI MANE</span>
+                <span className="cert-sign-line" />
+                <span className="cert-sign-name">Abdoul-wadoudou BABA CHABI MANE</span>
+                <span className="cert-sign-title">CEO, Vertex Global</span>
               </div>
               <p className="cert-code">Code de vérification : {code}</p>
             </div>
@@ -857,7 +882,7 @@ function Footer() {
 // ---------- App ----------
 
 export default function App() {
-  const { progress, capture, reset, recordExam, setStudentName } = useProgress()
+  const { progress, capture, reset, recordExam, setStudentName, markCertIssued } = useProgress()
   const [view, setView] = useState({ name: 'home' })
   const [confettiId, setConfettiId] = useState(0)
   const [toast, setToast] = useState(null)
@@ -867,6 +892,9 @@ export default function App() {
   const xp = useMemo(() => ALL_LABS.reduce((sum, l) => sum + (progress[l.id] ? l.xp : 0), 0), [progress])
   const rankInfo = useMemo(() => getRankInfo(xp), [xp])
   const allWorldsDone = useMemo(() => worldsMeta.every((m) => m.complete), [worldsMeta])
+  // Diplômé = certificat déjà délivré, ou examen déjà réussi (avant même la 1re génération).
+  // Une fois vrai, l'examen ne doit plus jamais être reproposé.
+  const graduated = !!(progress.certIssued || progress.examPassed)
 
   useEffect(() => () => clearTimeout(toastTimer.current), [])
 
@@ -917,7 +945,7 @@ export default function App() {
       </div>
       <ExamCard
         allDone={allWorldsDone}
-        examPassed={!!progress.examPassed}
+        graduated={graduated}
         examBest={progress.examBest || 0}
         onStart={goExam}
         onCertificate={goCertificate}
@@ -954,12 +982,24 @@ export default function App() {
       )
     }
   } else if (view.name === 'exam') {
+    // Un·e diplômé·e ne se voit plus jamais PROPOSER l'examen (ExamCard ne lui offre plus le
+    // bouton) — mais on ne coupe pas la vue en cours si "graduated" bascule pendant l'attempt
+    // (recordExam passe examPassed à true dès la validation d'un score gagnant, avant même que
+    // l'écran de correction n'ait eu le temps de s'afficher).
     if (allWorldsDone) {
       content = <ExamView onBackHome={goHome} onCertificate={goCertificate} recordExam={recordExam} />
     }
   } else if (view.name === 'certificate') {
-    if (progress.examPassed) {
-      content = <CertificateView progress={progress} xp={xp} onSetName={setStudentName} onBackHome={goHome} />
+    if (graduated) {
+      content = (
+        <CertificateView
+          progress={progress}
+          xp={xp}
+          onSetName={setStudentName}
+          onIssued={markCertIssued}
+          onBackHome={goHome}
+        />
+      )
     }
   }
 
@@ -987,7 +1027,7 @@ export default function App() {
 // ---------- CSS ----------
 
 const CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Playfair+Display:wght@600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Playfair+Display:wght@600;700;800&family=Great+Vibes&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap');
 
 :root {
   --bg: #0A0E17;
@@ -1347,8 +1387,8 @@ code { font-family: var(--font-mono); }
 .exam-card--locked { opacity: 0.5; }
 .exam-card--available { border-color: var(--gold); box-shadow: 0 0 0 1px rgba(240,180,41,0.15); }
 .exam-card--available .exam-card-icon { background: rgba(240,180,41,0.14); }
-.exam-card--passed { border-color: var(--green); }
-.exam-card--passed .exam-card-icon { background: rgba(55,224,166,0.14); }
+.exam-card--graduated { border-color: var(--gold); box-shadow: 0 0 0 1px rgba(240,180,41,0.25), 0 0 24px -8px rgba(240,180,41,0.35); }
+.exam-card--graduated .exam-card-icon { background: rgba(240,180,41,0.18); }
 
 /* ---------- Vue examen ---------- */
 
@@ -1421,7 +1461,7 @@ code { font-family: var(--font-mono); }
 .cert-border {
   height: 100%; box-sizing: border-box;
   border: 3px solid var(--vertex-navy); outline: 1px solid var(--vertex-gold); outline-offset: -8px;
-  padding: 26px 44px; display: flex; flex-direction: column; align-items: center; text-align: center;
+  padding: 18px 44px; display: flex; flex-direction: column; align-items: center; text-align: center;
   background: linear-gradient(180deg, var(--vertex-paper) 0%, var(--vertex-paper-warm) 100%);
 }
 
@@ -1457,25 +1497,25 @@ code { font-family: var(--font-mono); }
 
 .cert-footer {
   margin-top: auto; width: 100%; display: flex; align-items: flex-end; justify-content: space-between;
-  padding-top: 10px; border-top: 1px solid rgba(199,154,59,0.4);
+  padding-top: 6px; border-top: 1px solid rgba(199,154,59,0.4);
 }
 .cert-footer-left { text-align: left; flex: 1; min-width: 0; margin-right: 24px; }
-.cert-date { font-size: 0.76rem; color: var(--vertex-ink); margin: 0 0 10px; }
-.cert-sig {
-  border-top: 1px solid var(--vertex-gold); padding-top: 4px; margin-bottom: 6px;
-  display: flex; flex-direction: column; gap: 1px; max-width: 360px;
+.cert-date { font-size: 0.76rem; color: var(--vertex-ink); margin: 0 0 6px; }
+.cert-sign { display: flex; flex-direction: column; align-items: center; gap: 1px; margin-bottom: 4px; max-width: 260px; }
+.cert-sign-img { height: 44px; max-width: 100%; object-fit: contain; margin-bottom: -4px; }
+.cert-sign-calli {
+  display: none; font-family: 'Great Vibes', cursive; font-size: 15px; color: var(--vertex-ink);
+  line-height: 1.1; text-align: center; white-space: nowrap;
 }
-.cert-sig-name {
-  font-family: var(--font-serif); font-style: italic; font-weight: 700; font-size: 0.8rem; color: var(--vertex-navy);
-  white-space: nowrap;
-}
-.cert-sig-title { font-family: var(--font-body); font-size: 0.72rem; color: var(--vertex-ink); opacity: 0.75; }
+.cert-sign-line { width: 220px; border-top: 1.5px solid var(--vertex-gold); margin: 4px 0; }
+.cert-sign-name { font-family: var(--font-serif); font-weight: 700; color: var(--vertex-navy); font-size: 0.78rem; text-align: center; white-space: nowrap; }
+.cert-sign-title { font-size: 0.72rem; color: #5B6B7E; letter-spacing: 0.04em; text-align: center; }
 .cert-code { font-family: var(--font-mono); font-size: 0.68rem; color: var(--vertex-navy); margin: 0; letter-spacing: 0.03em; }
 
 .cert-seal-wrap { display: flex; flex-direction: column; align-items: center; gap: 4px; }
 .cert-seal-rank { font-family: var(--font-mono); font-size: 0.66rem; color: var(--vertex-navy); }
 
-.cert-banner { margin-top: 8px; font-family: var(--font-serif); font-style: italic; font-size: 0.84rem; color: var(--vertex-gold); }
+.cert-banner { margin-top: 4px; font-family: var(--font-serif); font-style: italic; font-size: 0.84rem; color: var(--vertex-gold); }
 
 /* ---------- Responsive ---------- */
 
