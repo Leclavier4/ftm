@@ -823,7 +823,8 @@ function CertificateView({ progress, xp, onSetName, onBackHome }) {
             <div className="cert-footer-left">
               <p className="cert-date">Délivré le {dateStr}</p>
               <div className="cert-sig">
-                <span className="cert-sig-line">Chabmane — Vertex Global</span>
+                <span className="cert-sig-name">Abdoul-wadoudou BABA CHABI MANE</span>
+                <span className="cert-sig-title">CEO, Vertex Global</span>
               </div>
               <p className="cert-code">Code de vérification : {code}</p>
             </div>
@@ -1458,10 +1459,17 @@ code { font-family: var(--font-mono); }
   margin-top: auto; width: 100%; display: flex; align-items: flex-end; justify-content: space-between;
   padding-top: 10px; border-top: 1px solid rgba(199,154,59,0.4);
 }
-.cert-footer-left { text-align: left; }
+.cert-footer-left { text-align: left; flex: 1; min-width: 0; margin-right: 24px; }
 .cert-date { font-size: 0.76rem; color: var(--vertex-ink); margin: 0 0 10px; }
-.cert-sig { border-top: 1px solid var(--vertex-gold); padding-top: 4px; margin-bottom: 6px; width: 200px; }
-.cert-sig-line { font-family: var(--font-serif); font-style: italic; font-size: 0.85rem; color: var(--vertex-navy); }
+.cert-sig {
+  border-top: 1px solid var(--vertex-gold); padding-top: 4px; margin-bottom: 6px;
+  display: flex; flex-direction: column; gap: 1px; max-width: 360px;
+}
+.cert-sig-name {
+  font-family: var(--font-serif); font-style: italic; font-weight: 700; font-size: 0.8rem; color: var(--vertex-navy);
+  white-space: nowrap;
+}
+.cert-sig-title { font-family: var(--font-body); font-size: 0.72rem; color: var(--vertex-ink); opacity: 0.75; }
 .cert-code { font-family: var(--font-mono); font-size: 0.68rem; color: var(--vertex-navy); margin: 0; letter-spacing: 0.03em; }
 
 .cert-seal-wrap { display: flex; flex-direction: column; align-items: center; gap: 4px; }
